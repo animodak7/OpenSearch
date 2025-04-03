@@ -784,7 +784,7 @@ public final class KeywordFieldMapper extends ParametrizedFieldMapper {
         }
 
         if (fieldType().hasDocValues()) {
-            context.doc().add(new SortedSetDocValuesField(fieldType().name(), binaryValue));
+            context.doc().add(SortedSetDocValuesField.indexedField(fieldType().name(), binaryValue));
         }
     }
 
