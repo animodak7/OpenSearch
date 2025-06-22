@@ -36,6 +36,7 @@ import com.fasterxml.jackson.dataformat.cbor.CBORConstants;
 import com.fasterxml.jackson.dataformat.smile.SmileConstants;
 
 import org.opensearch.common.annotation.PublicApi;
+import org.opensearch.common.xcontent.avro.AvroXContent;
 import org.opensearch.common.xcontent.cbor.CborXContent;
 import org.opensearch.common.xcontent.json.JsonXContent;
 import org.opensearch.common.xcontent.smile.SmileXContent;
@@ -236,8 +237,54 @@ public enum XContentType implements MediaType {
         public XContentBuilder contentBuilder(final OutputStream os) throws IOException {
             return new XContentBuilder(CborXContent.cborXContent, os);
         }
-    };
+    },
+    /**
+     * A YAML based content type.
+     */
+    AVRO(4) {
+        @Override
+        public String mediaTypeWithoutParameters() {
+            return "application/avro";
+        }
 
+        @Override
+        public String subtype() {
+            return "avro";
+        }
+
+        @Override
+        public XContent xContent() {
+            // Return a custom AvroXContent implementation if you create one.
+            // For now, throw if used in unsupported way
+            return AvroXContent.avroXContent;
+        }
+
+        @Override
+        public boolean detectedXContent(final byte[] bytes, int offset, int length) {
+            // Avro file starts with magic bytes: "Obj" followed by 1 (0x4F 0x62 0x6A 0x01)
+            return length >= 4 &&
+                bytes[offset] == (byte) 0x4F &&  // 'O'
+                bytes[offset + 1] == (byte) 0x62 &&  // 'b'
+                bytes[offset + 2] == (byte) 0x6A &&  // 'j'
+                bytes[offset + 3] == (byte) 0x01;
+        }
+
+        @Override
+        public boolean detectedXContent(final CharSequence content, final int length) {
+            // Binary format — never auto-detect from string
+            return false;
+        }
+
+        @Override
+        public XContentBuilder contentBuilder() throws IOException {
+            throw new UnsupportedOperationException("AvroXContentBuilder is not implemented");
+        }
+
+        @Override
+        public XContentBuilder contentBuilder(final OutputStream os) throws IOException {
+            throw new UnsupportedOperationException("AvroXContentBuilder is not implemented");
+        }
+    };
     private int index;
 
     XContentType(int index) {

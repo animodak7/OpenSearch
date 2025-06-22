@@ -32,6 +32,7 @@
 
 package org.opensearch.common.xcontent;
 
+import org.opensearch.common.xcontent.avro.AvroXContent;
 import org.opensearch.common.xcontent.json.JsonXContent;
 import org.opensearch.common.xcontent.smile.SmileXContent;
 import org.opensearch.common.xcontent.yaml.YamlXContent;
@@ -94,5 +95,18 @@ public class XContentFactory {
      */
     public static XContentBuilder cborBuilder() throws IOException {
         return MediaTypeRegistry.contentBuilder(XContentType.CBOR);
+    }
+    /**
+     * Constructs a new yaml builder that will output the result into the provided output stream.
+     */
+    public static XContentBuilder avroBuilder(OutputStream os) throws IOException {
+        return new XContentBuilder(AvroXContent.avroXContent, os);
+    }
+
+    /**
+     * Returns a content builder using CBOR format ({@link org.opensearch.common.xcontent.XContentType#CBOR}.
+     */
+    public static XContentBuilder avroBuilder() throws IOException {
+        return MediaTypeRegistry.contentBuilder(XContentType.AVRO);
     }
 }

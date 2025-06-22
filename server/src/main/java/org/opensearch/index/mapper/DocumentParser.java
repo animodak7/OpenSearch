@@ -32,6 +32,12 @@
 
 package org.opensearch.index.mapper;
 
+import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericDatumReader;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.avro.io.BinaryDecoder;
+import org.apache.avro.io.DatumReader;
+import org.apache.avro.io.DecoderFactory;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.index.IndexableField;
 import org.opensearch.OpenSearchParseException;
@@ -117,6 +123,134 @@ final class DocumentParser {
             }
         }
         return false;
+    }
+
+    private static final String[] AVRO_HEADER_ARRAY = {
+        "backend_ip", "backend_port", "backend_processing_time", "backend_status_code",
+        "client_ip", "client_port", "connection_time", "destination_ip", "destination_port",
+        "elb_status_code", "http_port", "http_version", "matched_rule_priority",
+        "received_bytes", "request_creation_time", "request_processing_time",
+        "response_processing_time", "sent_bytes", "target_ip", "target_port",
+        "target_processing_time", "target_status_code", "timestamp"
+    };
+
+    // Add method to parse Avro data
+    private static void parseAvroData(final ParseContext context, ObjectMapper parentMapper) throws IOException {
+        // Get the Avro binary data from the context
+        byte[] avroData = context.parser().binaryValue();
+
+        // Create Avro decoder and reader
+        BinaryDecoder decoder = DecoderFactory.get().binaryDecoder(avroData, null);
+        DatumReader<GenericRecord> reader = new GenericDatumReader<>(getAvroSchema());
+
+        // Read the Avro record
+        GenericRecord record = reader.read(null, decoder);
+
+        // Parse each field from the Avro record
+        for (String fieldName : AVRO_HEADER_ARRAY) {
+            Object value = record.get(fieldName);
+            if (value != null) {
+                FieldMapper fieldMapper = (FieldMapper) parentMapper.getMapper(fieldName);
+                if (fieldMapper != null) {
+                    // Create context with the appropriate value type
+                    ParseContext fieldContext = createContextForValue(context, value);
+                    fieldMapper.parse(fieldContext);
+//                    parseCopyFields(context, fieldMapper.copyTo().copyToFields());
+                    parseObjectOrField(context, fieldMapper);
+
+                }
+            }
+        }
+    }
+
+    // Helper method to create appropriate context based on value type
+    private static ParseContext createContextForValue(ParseContext context, Object value) {
+        if (value instanceof CharSequence) {
+            return context.createExternalValueContext(value.toString());
+        } else if (value instanceof Number) {
+            return context.createExternalValueContext(value);
+        } else if (value instanceof Boolean) {
+            return context.createExternalValueContext(value);
+        } else if (value instanceof Long) {
+            // Handle timestamp fields
+            return context.createExternalValueContext(value);
+        } else if (value instanceof Float || value instanceof Double) {
+            return context.createExternalValueContext(((Number) value).doubleValue());
+        } else {
+            return context.createExternalValueContext(value.toString());
+        }
+    }
+
+    // Get Avro schema
+    private static Schema getAvroSchema() {
+        String schemaJson = "{\n" +
+            "  \"type\": \"record\",\n" +
+            "  \"name\": \"LogRecord\",\n" +
+            "  \"namespace\": \"org.opensearch.common.xcontent.avro\",\n" +
+            "  \"fields\": [\n" +
+            "    {\"name\": \"backend_ip\", \"type\": [\"null\", \"string\"]},\n" +
+            "    {\"name\": \"backend_port\", \"type\": [\"null\", \"int\"]},\n" +
+            "    {\"name\": \"backend_processing_time\", \"type\": [\"null\", \"float\"]},\n" +
+            "    {\"name\": \"backend_status_code\", \"type\": [\"null\", \"int\"]},\n" +
+            "    {\"name\": \"client_ip\", \"type\": [\"null\", \"string\"]},\n" +
+            "    {\"name\": \"client_port\", \"type\": [\"null\", \"int\"]},\n" +
+            "    {\"name\": \"connection_time\", \"type\": [\"null\", \"float\"]},\n" +
+            "    {\"name\": \"destination_ip\", \"type\": [\"null\", \"string\"]},\n" +
+            "    {\"name\": \"destination_port\", \"type\": [\"null\", \"int\"]},\n" +
+            "    {\"name\": \"elb_status_code\", \"type\": [\"null\", \"int\"]},\n" +
+            "    {\"name\": \"http_port\", \"type\": [\"null\", \"int\"]},\n" +
+            "    {\"name\": \"http_version\", \"type\": [\"null\", \"string\"]},\n" +
+            "    {\"name\": \"matched_rule_priority\", \"type\": [\"null\", \"int\"]},\n" +
+            "    {\"name\": \"received_bytes\", \"type\": [\"null\", \"long\"]},\n" +
+            "    {\"name\": \"request_creation_time\", \"type\": [\"null\", \"long\"]},\n" +
+            "    {\"name\": \"request_processing_time\", \"type\": [\"null\", \"float\"]},\n" +
+            "    {\"name\": \"response_processing_time\", \"type\": [\"null\", \"float\"]},\n" +
+            "    {\"name\": \"sent_bytes\", \"type\": [\"null\", \"long\"]},\n" +
+            "    {\"name\": \"target_ip\", \"type\": [\"null\", \"string\"]},\n" +
+            "    {\"name\": \"target_port\", \"type\": [\"null\", \"int\"]},\n" +
+            "    {\"name\": \"target_processing_time\", \"type\": [\"null\", \"float\"]},\n" +
+            "    {\"name\": \"target_status_code\", \"type\": [\"null\", \"int\"]},\n" +
+            "    {\"name\": \"timestamp\", \"type\": [\"null\", \"long\"]}\n" +
+            "  ]\n" +
+            "}";
+        return new Schema.Parser().parse(schemaJson);
+    }
+
+    // Add type conversion utilities
+    private static class AvroTypeConverter {
+        static Object convertAvroValue(Object value, String fieldName) {
+            if (value == null) {
+                return null;
+            }
+
+            // Handle specific field types
+            switch (fieldName) {
+                case "request_creation_time":
+                case "timestamp":
+                    return value instanceof Long ? value : null;
+                case "backend_processing_time":
+                case "connection_time":
+                case "request_processing_time":
+                case "response_processing_time":
+                case "target_processing_time":
+                    return value instanceof Float ? value : null;
+                case "backend_port":
+                case "client_port":
+                case "destination_port":
+                case "http_port":
+                case "target_port":
+                case "backend_status_code":
+                case "elb_status_code":
+                case "target_status_code":
+                case "matched_rule_priority":
+                    return value instanceof Integer ? value : null;
+                case "received_bytes":
+                case "sent_bytes":
+                    return value instanceof Long ? value : null;
+                default:
+                    return value.toString();
+            }
+        }
     }
 
     private static void internalParseDocument(
@@ -713,15 +847,19 @@ final class DocumentParser {
             );
         }
         Mapper mapper = getMapper(context, parentMapper, currentFieldName, paths);
-        if (mapper != null) {
-            parseObjectOrField(context, mapper);
+        if (currentFieldName.contains("avro_data")) {
+            parseAvroData(context, parentMapper);
         } else {
-            currentFieldName = paths[paths.length - 1];
-            Tuple<Integer, ObjectMapper> parentMapperTuple = getDynamicParentMapper(context, paths, parentMapper);
-            parentMapper = parentMapperTuple.v2();
-            parseDynamicValue(context, parentMapper, currentFieldName, token);
-            for (int i = 0; i < parentMapperTuple.v1(); i++) {
-                context.path().remove();
+            if (mapper != null) {
+                parseObjectOrField(context, mapper);
+            } else {
+                currentFieldName = paths[paths.length - 1];
+                Tuple<Integer, ObjectMapper> parentMapperTuple = getDynamicParentMapper(context, paths, parentMapper);
+                parentMapper = parentMapperTuple.v2();
+                parseDynamicValue(context, parentMapper, currentFieldName, token);
+                for (int i = 0; i < parentMapperTuple.v1(); i++) {
+                    context.path().remove();
+                }
             }
         }
     }
