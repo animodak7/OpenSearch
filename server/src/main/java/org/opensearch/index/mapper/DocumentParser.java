@@ -165,30 +165,36 @@ final class DocumentParser {
     // Add method to parse Avro data
     private static void parseAvroData(final ParseContext context, ObjectMapper parentMapper) throws IOException {
         // Get the Avro binary data from the context
-        byte[] avroData = context.parser().binaryValue();
+        try {
+            byte[] avroData = context.parser().binaryValue();
 
-        // Create Avro decoder and reader
-        BinaryDecoder decoder = DecoderFactory.get().binaryDecoder(avroData, null);
-        DatumReader<GenericRecord> reader = new GenericDatumReader<>(getAvroSchema());
+            // Create Avro decoder and reader
+            BinaryDecoder decoder = DecoderFactory.get().binaryDecoder(avroData, null);
+            DatumReader<GenericRecord> reader = new GenericDatumReader<>(getAvroSchema());
 
-        // Read the Avro record
-        GenericRecord record = reader.read(null, decoder);
+            // Read the Avro record
+            GenericRecord record = reader.read(null, decoder);
 
-        // Parse each field from the Avro record
-        for (String fieldName : SCHEMA_HEADER_ARRAY) {
-            Object value = record.get(fieldName);
-            if (value != null) {
-                FieldMapper fieldMapper = (FieldMapper) parentMapper.getMapper(fieldName);
-                if (fieldMapper != null) {
-                    // Create context with the appropriate value type
-                    ParseContext fieldContext = createContextForValue(context, value);
-                    fieldMapper.parse(fieldContext);
+            // Parse each field from the Avro record
+            for (String fieldName : SCHEMA_HEADER_ARRAY) {
+                Object value = record.get(fieldName);
+                if (value != null) {
+                    FieldMapper fieldMapper = (FieldMapper) parentMapper.getMapper(fieldName);
+                    if (fieldMapper != null) {
+                        // Create context with the appropriate value type
+                        ParseContext fieldContext = createContextForValue(context, value);
+                        fieldMapper.parse(fieldContext);
 //                    parseCopyFields(context, fieldMapper.copyTo().copyToFields());
-                    parseObjectOrField(context, fieldMapper);
+                        parseObjectOrField(context, fieldMapper);
 
+                    }
                 }
             }
+        } catch (Exception e) {
+            String msg = "failed to parse avro data: " + e.getStackTrace();
+            System.out.println(msg);
         }
+
     }
 
     // Helper method to create appropriate context based on value type
@@ -216,29 +222,29 @@ final class DocumentParser {
             "  \"name\": \"LogRecord\",\n" +
             "  \"namespace\": \"org.opensearch.common.xcontent.avro\",\n" +
             "  \"fields\": [\n" +
-            "    {\"name\": \"timestamp\", \"type\": [\"null\", \"string\"]},\n" +
-            "    {\"name\": \"backend_ip\", \"type\": [\"null\", \"string\"]},\n" +
-            "    {\"name\": \"backend_port\", \"type\": [\"null\", \"int\"]},\n" +
-            "    {\"name\": \"backend_processing_time\", \"type\": [\"null\", \"float\"]},\n" +
-            "    {\"name\": \"backend_status_code\", \"type\": [\"null\", \"int\"]},\n" +
-            "    {\"name\": \"client_ip\", \"type\": [\"null\", \"string\"]},\n" +
-            "    {\"name\": \"client_port\", \"type\": [\"null\", \"int\"]},\n" +
-            "    {\"name\": \"connection_time\", \"type\": [\"null\", \"float\"]},\n" +
-            "    {\"name\": \"destination_ip\", \"type\": [\"null\", \"string\"]},\n" +
-            "    {\"name\": \"destination_port\", \"type\": [\"null\", \"int\"]},\n" +
-            "    {\"name\": \"elb_status_code\", \"type\": [\"null\", \"int\"]},\n" +
-            "    {\"name\": \"http_port\", \"type\": [\"null\", \"int\"]},\n" +
-            "    {\"name\": \"http_version\", \"type\": [\"null\", \"string\"]},\n" +
-            "    {\"name\": \"matched_rule_priority\", \"type\": [\"null\", \"int\"]},\n" +
-            "    {\"name\": \"received_bytes\", \"type\": [\"null\", \"long\"]},\n" +
-            "    {\"name\": \"request_creation_time\", \"type\": [\"null\", \"long\"]},\n" +
-            "    {\"name\": \"request_processing_time\", \"type\": [\"null\", \"float\"]},\n" +
-            "    {\"name\": \"response_processing_time\", \"type\": [\"null\", \"float\"]},\n" +
-            "    {\"name\": \"sent_bytes\", \"type\": [\"null\", \"long\"]},\n" +
-            "    {\"name\": \"target_ip\", \"type\": [\"null\", \"string\"]},\n" +
-            "    {\"name\": \"target_port\", \"type\": [\"null\", \"int\"]},\n" +
-            "    {\"name\": \"target_processing_time\", \"type\": [\"null\", \"float\"]},\n" +
-            "    {\"name\": \"target_status_code\", \"type\": [\"null\", \"int\"]}\n" +
+            "    {\"name\": \"timestamp\", \"type\": \"long\"},\n" +
+            "    {\"name\": \"backend_ip\", \"type\": \"string\"},\n" +
+            "    {\"name\": \"backend_port\", \"type\": \"long\"},\n" +
+            "    {\"name\": \"backend_processing_time\", \"type\": \"float\"},\n" +
+            "    {\"name\": \"backend_status_code\", \"type\": \"int\"},\n" +
+            "    {\"name\": \"client_ip\", \"type\": \"string\"},\n" +
+            "    {\"name\": \"client_port\", \"type\": \"int\"},\n" +
+            "    {\"name\": \"connection_time\", \"type\": \"float\"},\n" +
+            "    {\"name\": \"destination_ip\", \"type\": \"string\"},\n" +
+            "    {\"name\": \"destination_port\", \"type\": \"int\"},\n" +
+            "    {\"name\": \"elb_status_code\", \"type\": \"int\"},\n" +
+            "    {\"name\": \"http_port\", \"type\": \"int\"},\n" +
+            "    {\"name\": \"http_version\", \"type\": \"string\"},\n" +
+            "    {\"name\": \"matched_rule_priority\", \"type\": \"int\"},\n" +
+            "    {\"name\": \"received_bytes\", \"type\": \"long\"},\n" +
+            "    {\"name\": \"request_creation_time\", \"type\": \"long\"},\n" +
+            "    {\"name\": \"request_processing_time\", \"type\": \"float\"},\n" +
+            "    {\"name\": \"response_processing_time\", \"type\": \"float\"},\n" +
+            "    {\"name\": \"sent_bytes\", \"type\": \"long\"},\n" +
+            "    {\"name\": \"target_ip\", \"type\": \"string\"},\n" +
+            "    {\"name\": \"target_port\", \"type\": \"int\"},\n" +
+            "    {\"name\": \"target_processing_time\", \"type\": \"float\"},\n" +
+            "    {\"name\": \"target_status_code\", \"type\": \"int\"}\n" +
             "  ]\n" +
             "}";
         return new Schema.Parser().parse(schemaJson);
@@ -877,7 +883,7 @@ final class DocumentParser {
         Mapper mapper = getMapper(context, parentMapper, currentFieldName, paths);
         if (currentFieldName.contains("avro_data")) {
             parseAvroData(context, parentMapper);
-            }
+        }
         if (currentFieldName.contains("csv_data_row")) {
             parseCsvRow(context, parentMapper, SCHEMA_HEADER_ARRAY);
         } else {
