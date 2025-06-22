@@ -44,6 +44,7 @@ import org.opensearch.OpenSearchParseException;
 import org.opensearch.Version;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.common.collect.Tuple;
+import org.opensearch.common.geo.GeoPoint;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.time.DateFormatter;
 import org.opensearch.common.xcontent.LoggingDeprecationHandler;
@@ -134,6 +135,33 @@ final class DocumentParser {
         "target_processing_time", "target_status_code", "timestamp"
     };
 
+    private static final String[] SCHEMA_HEADER_ARRAY = {
+        "timestamp",
+        "backend_ip",
+        "backend_port",
+        "backend_processing_time",
+        "backend_status_code",
+        "client_ip",
+        "client_port",
+        "connection_time",
+        "destination_ip",
+        "destination_port",
+        "elb_status_code",
+        "http_port",
+        "http_version",
+        "matched_rule_priority",
+        "received_bytes",
+        "request_creation_time",
+        "request_processing_time",
+        "response_processing_time",
+        "sent_bytes",
+        "target_ip",
+        "target_port",
+        "target_processing_time",
+        "target_status_code"
+    };
+
+
     // Add method to parse Avro data
     private static void parseAvroData(final ParseContext context, ObjectMapper parentMapper) throws IOException {
         // Get the Avro binary data from the context
@@ -147,7 +175,7 @@ final class DocumentParser {
         GenericRecord record = reader.read(null, decoder);
 
         // Parse each field from the Avro record
-        for (String fieldName : AVRO_HEADER_ARRAY) {
+        for (String fieldName : SCHEMA_HEADER_ARRAY) {
             Object value = record.get(fieldName);
             if (value != null) {
                 FieldMapper fieldMapper = (FieldMapper) parentMapper.getMapper(fieldName);
@@ -188,6 +216,7 @@ final class DocumentParser {
             "  \"name\": \"LogRecord\",\n" +
             "  \"namespace\": \"org.opensearch.common.xcontent.avro\",\n" +
             "  \"fields\": [\n" +
+            "    {\"name\": \"timestamp\", \"type\": [\"null\", \"string\"]},\n" +
             "    {\"name\": \"backend_ip\", \"type\": [\"null\", \"string\"]},\n" +
             "    {\"name\": \"backend_port\", \"type\": [\"null\", \"int\"]},\n" +
             "    {\"name\": \"backend_processing_time\", \"type\": [\"null\", \"float\"]},\n" +
@@ -209,8 +238,7 @@ final class DocumentParser {
             "    {\"name\": \"target_ip\", \"type\": [\"null\", \"string\"]},\n" +
             "    {\"name\": \"target_port\", \"type\": [\"null\", \"int\"]},\n" +
             "    {\"name\": \"target_processing_time\", \"type\": [\"null\", \"float\"]},\n" +
-            "    {\"name\": \"target_status_code\", \"type\": [\"null\", \"int\"]},\n" +
-            "    {\"name\": \"timestamp\", \"type\": [\"null\", \"long\"]}\n" +
+            "    {\"name\": \"target_status_code\", \"type\": [\"null\", \"int\"]}\n" +
             "  ]\n" +
             "}";
         return new Schema.Parser().parse(schemaJson);
@@ -849,6 +877,9 @@ final class DocumentParser {
         Mapper mapper = getMapper(context, parentMapper, currentFieldName, paths);
         if (currentFieldName.contains("avro_data")) {
             parseAvroData(context, parentMapper);
+            }
+        if (currentFieldName.contains("csv_data_row")) {
+            parseCsvRow(context, parentMapper, SCHEMA_HEADER_ARRAY);
         } else {
             if (mapper != null) {
                 parseObjectOrField(context, mapper);
@@ -861,6 +892,29 @@ final class DocumentParser {
                     context.path().remove();
                 }
             }
+        }
+    }
+
+
+    private static void parseCsvRow(final ParseContext context, ObjectMapper parentMapper, String[] mapperArray) throws IOException {
+        String value = context.parser().textOrNull();
+        String[] values = value.split("\\|");
+
+        for (int i = 0; i < values.length; ++i) {
+            FieldMapper fieldMapper = (FieldMapper) parentMapper.getMapper(mapperArray[i]);
+
+            if (fieldMapper instanceof GeoPointFieldMapper) {
+                String[] val = values[i].substring(1, values[i].length() - 1).split(",");
+                List<GeoPoint> geoPoint = new ArrayList<>();
+                GeoPoint gp = new GeoPoint(Double.parseDouble(val[0]), Double.parseDouble(val[1]));
+                geoPoint.add(gp);
+                ParseContext csvValueContext = context.createExternalValueContext(geoPoint);
+                fieldMapper.parse(csvValueContext);
+            } else {
+                ParseContext csvValueContext = context.createExternalValueContext(values[i]);
+                fieldMapper.parse(csvValueContext);
+            }
+            parseCopyFields(context, fieldMapper.copyTo().copyToFields());
         }
     }
 

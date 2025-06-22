@@ -38,6 +38,7 @@ import com.fasterxml.jackson.dataformat.smile.SmileConstants;
 import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.xcontent.avro.AvroXContent;
 import org.opensearch.common.xcontent.cbor.CborXContent;
+import org.opensearch.common.xcontent.csv.CsvXContent;
 import org.opensearch.common.xcontent.json.JsonXContent;
 import org.opensearch.common.xcontent.smile.SmileXContent;
 import org.opensearch.common.xcontent.yaml.YamlXContent;
@@ -283,6 +284,41 @@ public enum XContentType implements MediaType {
         @Override
         public XContentBuilder contentBuilder(final OutputStream os) throws IOException {
             throw new UnsupportedOperationException("AvroXContentBuilder is not implemented");
+        }
+    }, CSV(5) {
+        @Override
+        public String mediaTypeWithoutParameters() {
+            return "application/csv";
+        }
+
+        @Override
+        public XContentBuilder contentBuilder() throws IOException {
+            return null;
+        }
+
+        @Override
+        public XContentBuilder contentBuilder(OutputStream os) throws IOException {
+            return null;
+        }
+
+        @Override
+        public String subtype() {
+            return "csv";
+        }
+
+        @Override
+        public XContent xContent() {
+            return CsvXContent.csvXContent;
+        }
+
+        @Override
+        public boolean detectedXContent(byte[] bytes, int offset, int length) {
+            return false;
+        }
+
+        @Override
+        public boolean detectedXContent(CharSequence content, int length) {
+            return false;
         }
     };
     private int index;
