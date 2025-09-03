@@ -49,6 +49,7 @@ prost = "0.13"
 # Temporary directory support
 tempfile = "3.0"
 chrono = "0.4.41"
+async-trait = "0.1.88"
 
 [build-dependencies]
 cbindgen = "0.27"
