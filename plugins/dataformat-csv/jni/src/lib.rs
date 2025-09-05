@@ -25,6 +25,7 @@ mod csv_exec;
 mod listing_table;
 mod searcher;
 mod shard_view;
+mod row_id_optimizer;
 
 use context::SessionContextManager;
 use runtime::RuntimeManager;

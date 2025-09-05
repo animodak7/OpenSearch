@@ -6,7 +6,7 @@
  * compatible open source license.
  */
 
-package org.opensearch.datafusion.csv;
+package org.opensearch.datafusion;
 
 import java.io.IOException;
 

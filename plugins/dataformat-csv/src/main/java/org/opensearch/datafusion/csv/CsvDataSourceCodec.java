@@ -34,12 +34,8 @@ public class CsvDataSourceCodec implements DataSourceCodec {
     private final ConcurrentHashMap<Long, SearcherSupplier> sessionContextSuppliers = new ConcurrentHashMap<>();
     // This should come from the Constructor? Should we move this to the DataFusionEngine?
 
-    // Ideally this should be maintained by the Engine...
-    private final ShardViewReferenceManager shardViewReferenceManager;
-
 
     public CsvDataSourceCodec(String path) throws IOException {
-        shardViewReferenceManager = new ShardViewReferenceManager(path, new String[0]);
     }
 
     // JNI library loading

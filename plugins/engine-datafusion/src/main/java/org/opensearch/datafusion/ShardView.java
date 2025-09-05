@@ -6,7 +6,7 @@
  * compatible open source license.
  */
 
-package org.opensearch.datafusion.csv;
+package org.opensearch.datafusion;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -15,10 +15,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 // JNI from java to rust
 // substrait
 // Harcode --> file --> register as the table with the same name
-public class CsvShardView implements Closeable {
+public class ShardView implements Closeable {
+    public String directoryPath;
+    public String[] files;
+    private AtomicInteger refCount = new AtomicInteger(0);
     public long cachePtr;
 
-    public CsvShardView(String directoryPath, String[] files) {
+    public ShardView(String directoryPath, String[] files) {
+        this.directoryPath = directoryPath;
+        this.files = files;
         this.cachePtr = createShardView(directoryPath, files);
         incRef();
     }
