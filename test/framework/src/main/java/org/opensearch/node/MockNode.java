@@ -161,7 +161,7 @@ public class MockNode extends Node {
         return new MockPageCacheRecycler(settings);
     }
 
-    @Override
+//    @Override
     protected SearchService newSearchService(
         ClusterService clusterService,
         IndicesService indicesService,
@@ -191,7 +191,8 @@ public class MockNode extends Node {
                 indexSearcherExecutor,
                 taskResourceTrackingService,
                 concurrentSearchDeciderFactories,
-                pluginProfilers
+                pluginProfilers,
+                List.of()
             );
         }
         return new MockSearchService(
