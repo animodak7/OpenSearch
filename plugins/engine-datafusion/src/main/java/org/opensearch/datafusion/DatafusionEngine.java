@@ -154,7 +154,7 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
     public DatafusionContext createContext(ReaderContext readerContext, ShardSearchRequest request, SearchShardTarget searchShardTarget, SearchShardTask task, BigArrays bigArrays, SearchContext originalContext) throws IOException {
         DatafusionContext datafusionContext = new DatafusionContext(readerContext, request, searchShardTarget, task, this, bigArrays, originalContext);
         // Parse source
-        datafusionContext.datafusionQuery(new DatafusionQuery(request.shardId().getIndexName(), request.source().queryPlanIR(), new ArrayList<>()));
+        datafusionContext.datafusionQuery(new DatafusionQuery(request.shardId().getIndexName(), request.source().queryPlanIR(), new ArrayList<>(), request.source().aggregations() != null));
         return datafusionContext;
     }
 
@@ -244,7 +244,7 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
 
 
     @Override
-    public Map<String, Object[]> executeQueryPhase(DatafusionContext context) {
+    public void executeQueryPhase(DatafusionContext context) {
         long startTime = System.nanoTime();
         logger.info("[QueryPhase] Starting query phase for shard: {}", context.indexShard().shardId());
 
@@ -329,9 +329,8 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
                 collectionEndTime > 0 ? (collectionEndTime - collectionStartTime) / 1_000_000.0 : 0,
                 rowIdResult.size());
         }
-
+        context.setDFResults(finalRes);
         context.queryResult().topDocs(new TopDocsAndMaxScore(new TopDocs(new TotalHits(rowIdResult.size(), TotalHits.Relation.EQUAL_TO), rowIdResult.stream().map(d-> new ScoreDoc(d.intValue(), Float.NaN, context.indexShard().shardId().getId())).toList().toArray(ScoreDoc[]::new)) , Float.NaN), new DocValueFormat[0]);
-        return finalRes;
     }
 
     @Override
@@ -583,6 +582,7 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
                         builder.endObject();
                     }
                     assert row_id != null || rowIds.get(i) != null;
+                    assert rowIdToIndex.containsKey(row_id);
                     assert _id != null;
                     BytesReference document = BytesReference.bytes(builder);
                     byteRefs.add(document);

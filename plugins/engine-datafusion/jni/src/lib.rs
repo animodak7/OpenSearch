@@ -10,7 +10,7 @@ use std::num::NonZeroUsize;
 use std::ptr::addr_of_mut;
 use jni::objects::{JByteArray, JClass, JObject};
 use jni::objects::JLongArray;
-use jni::sys::{jbyteArray, jint, jlong, jstring};
+use jni::sys::{jboolean, jbyteArray, jint, jlong, jstring};
 use jni::{JNIEnv, JavaVM};
 use std::sync::{Arc, OnceLock};
 use arrow_array::{Array, StructArray};
@@ -331,7 +331,7 @@ pub extern "system" fn Java_org_opensearch_datafusion_jni_NativeBridge_createDat
         }
     };
 
-    let files: Vec<String> = match parse_string_arr(&mut env, files) {
+    let mut files: Vec<String> = match parse_string_arr(&mut env, files) {
         Ok(files) => files,
         Err(e) => {
             let _ = env.throw_new(
@@ -342,6 +342,8 @@ pub extern "system" fn Java_org_opensearch_datafusion_jni_NativeBridge_createDat
         }
     };
 
+    // TODO: This works since files are named similarly ending with incremental generation count, preferably move this up to DatafusionReaderManager to keep file order
+    files.sort();
     let files_metadata = match create_file_meta_from_filenames(&table_path, files.clone()) {
         Ok(metadata) => metadata,
         Err(err) => {
@@ -451,6 +453,7 @@ pub extern "system" fn Java_org_opensearch_datafusion_jni_NativeBridge_executeQu
     shard_view_ptr: jlong,
     table_name: JString,
     substrait_bytes: jbyteArray,
+    is_aggregation_query: jboolean,
     runtime_ptr: jlong,
     listener: JObject,
 ) {
@@ -474,6 +477,8 @@ pub extern "system" fn Java_org_opensearch_datafusion_jni_NativeBridge_executeQu
             return;
         }
     };
+
+    let is_aggregation_query: bool = is_aggregation_query !=0;
 
     let plan_bytes_obj = unsafe { JByteArray::from_raw(substrait_bytes) };
     let plan_bytes_vec = match env.convert_byte_array(plan_bytes_obj) {
@@ -512,6 +517,7 @@ pub extern "system" fn Java_org_opensearch_datafusion_jni_NativeBridge_executeQu
             files_meta,
             table_name,
             plan_bytes_vec,
+            is_aggregation_query,
             runtime,
             cpu_executor,
         ).await;
