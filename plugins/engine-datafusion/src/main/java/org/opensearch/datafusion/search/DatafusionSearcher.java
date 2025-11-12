@@ -46,7 +46,7 @@ public class DatafusionSearcher implements EngineSearcher<DatafusionQuery, Recor
 
             return NativeBridge.executeFetchPhase(reader.getReaderPtr(), row_ids, projections, runtimePtr);
         }
-        return NativeBridge.executeQueryPhase(reader.getReaderPtr(), datafusionQuery.getIndexName(), datafusionQuery.getSubstraitBytes(), runtimePtr);
+        return NativeBridge.executeQueryPhase(reader.getReaderPtr(), datafusionQuery.getIndexName(), datafusionQuery.getSubstraitBytes(), datafusionQuery.isAggregationQuery(), runtimePtr);
     }
 
     public DatafusionReader getReader() {

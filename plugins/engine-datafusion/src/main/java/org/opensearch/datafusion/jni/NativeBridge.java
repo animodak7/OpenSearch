@@ -27,7 +27,7 @@ public final class NativeBridge {
     public static native void closeGlobalRuntime(long ptr);
 
     // Query execution
-    public static native long executeQueryPhase(long readerPtr, String tableName, byte[] plan, long runtimePtr);
+    public static native long executeQueryPhase(long readerPtr, String tableName, byte[] plan, boolean isAggregationQuery, long runtimePtr);
     public static native long executeFetchPhase(long readerPtr, long[] rowIds, String[] projections, long runtimePtr);
 
     // Stream operations

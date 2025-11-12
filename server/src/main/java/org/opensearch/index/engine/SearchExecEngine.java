@@ -38,7 +38,7 @@ public abstract class SearchExecEngine<C extends SearchContext, S extends Engine
     /**
      * execute Query Phase
      */
-    public abstract Map<String, Object[]> executeQueryPhase(C context) throws IOException;
+    public abstract void executeQueryPhase(C context) throws IOException;
 
     /**
      * execute Fetch Phase

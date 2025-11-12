@@ -20,12 +20,14 @@ public class DatafusionQuery {
     private Boolean isFetchPhase;
     private List<Long> queryPhaseRowIds;
     private List<String> projections;
+    private boolean isAggregationQuery;
 
-    public DatafusionQuery(String indexName, byte[] substraitBytes, List<SearchExecutor> searchExecutors) {
+    public DatafusionQuery(String indexName, byte[] substraitBytes, List<SearchExecutor> searchExecutors, boolean isAggregationQuery) {
         this.indexName = indexName;
         this.substraitBytes = substraitBytes;
         this.searchExecutors = searchExecutors;
         this.isFetchPhase = false;
+        this.isAggregationQuery = isAggregationQuery;
     }
 
     public void setProjections(List<String> projections) {
@@ -39,6 +41,14 @@ public class DatafusionQuery {
 
     public boolean isFetchPhase() {
         return this.isFetchPhase;
+    }
+
+    public boolean isAggregationQuery() {
+        return isAggregationQuery;
+    }
+
+    public void setAggregationQuery(boolean aggregationQuery) {
+        isAggregationQuery = aggregationQuery;
     }
 
     public List<Long> getQueryPhaseRowIds() {

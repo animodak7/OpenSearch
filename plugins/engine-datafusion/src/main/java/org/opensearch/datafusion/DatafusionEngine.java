@@ -88,7 +88,7 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
     public DatafusionContext createContext(ReaderContext readerContext, ShardSearchRequest request, SearchShardTarget searchShardTarget, SearchShardTask task, BigArrays bigArrays, SearchContext originalContext) throws IOException {
         DatafusionContext datafusionContext = new DatafusionContext(readerContext, request, searchShardTarget, task, this, bigArrays, originalContext);
         // Parse source
-        datafusionContext.datafusionQuery(new DatafusionQuery(request.shardId().getIndexName(), request.source().queryPlanIR(), new ArrayList<>()));
+        datafusionContext.datafusionQuery(new DatafusionQuery(request.shardId().getIndexName(), request.source().queryPlanIR(), new ArrayList<>(), request.source().aggregations() != null));
         return datafusionContext;
     }
 
@@ -178,7 +178,7 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
 
 
     @Override
-    public Map<String, Object[]> executeQueryPhase(DatafusionContext context) {
+    public void executeQueryPhase(DatafusionContext context) {
         Map<String, Object[]> finalRes = new HashMap<>();
         List<Long> rowIdResult = new ArrayList<>();
         RootAllocator allocator = null;
@@ -252,9 +252,8 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
                 throw new RuntimeException(e);
             }
         }
-
+        context.setDFResults(finalRes);
         context.queryResult().topDocs(new TopDocsAndMaxScore(new TopDocs(new TotalHits(rowIdResult.size(), TotalHits.Relation.EQUAL_TO), rowIdResult.stream().map(d-> new ScoreDoc(d.intValue(), Float.NaN, context.indexShard().shardId().getId())).toList().toArray(ScoreDoc[]::new)) , Float.NaN), new DocValueFormat[0]);
-        return finalRes;
     }
 
 
@@ -291,59 +290,69 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
 
         MapperService mapperService = context.mapperService();
         MappingLookup mappingLookup = mapperService.documentMapper().mappers();
-        SearchResultsCollector<RecordBatchStream> collector = recordBatchStream -> {
-            List<BytesReference> byteRefs = new ArrayList<>();
-            SearchHit[] hits = new SearchHit[rowIds.size()];
-            int totalHits = 0;
-            while (recordBatchStream.loadNextBatch().join()) {
-                VectorSchemaRoot vectorSchemaRoot = recordBatchStream.getVectorSchemaRoot();
-                List<FieldVector> fieldVectorList = vectorSchemaRoot.getFieldVectors();
-                for (int i = 0; i < vectorSchemaRoot.getRowCount(); i++) {
-                    XContentBuilder builder = XContentFactory.jsonBuilder().startObject();
-                    String _id = "_id";
-                    Long row_id = null;
+        SearchResultsCollector<RecordBatchStream> collector = new SearchResultsCollector<RecordBatchStream>() {
+            @Override
+            public void collect(RecordBatchStream recordBatchStream) throws IOException {
+                List<BytesReference> byteRefs = new ArrayList<>();
+                SearchHit[] hits = new SearchHit[rowIds.size()];
+                int totalHits = 0;
+                try {
 
-                    try {
-                        for (FieldVector valueVectors : fieldVectorList) {
-                            if (valueVectors.getName().equals(CompositeDataFormatWriter.ROW_ID)) {
-                                row_id = (long) valueVectors.getObject(i);
-                                continue;
-                            }
-                            Mapper mapper = mappingLookup.getMapper(valueVectors.getName());
-                            DerivedFieldGenerator derivedFieldGenerator = mapper.derivedFieldGenerator();
+                    while (recordBatchStream.loadNextBatch().join()) {
+                        VectorSchemaRoot vectorSchemaRoot = recordBatchStream.getVectorSchemaRoot();
+                        List<FieldVector> fieldVectorList = vectorSchemaRoot.getFieldVectors();
+                        for (int i = 0; i < vectorSchemaRoot.getRowCount(); i++) {
+                            XContentBuilder builder = XContentFactory.jsonBuilder().startObject();
+                            String _id = "_id";
+                            Long row_id = null;
 
-                            Object value = valueVectors.getObject(i);
-                            if(valueVectors instanceof ViewVarCharVector) {
-                                BytesRef bytesRef = new BytesRef(((ViewVarCharVector) valueVectors).get(i));
-                                derivedFieldGenerator.generate(builder, List.of(bytesRef)); // TODO: // Currently keyword field mapper do not have derived field converter from byte[] to BytesRef
-                            } else {
-                                derivedFieldGenerator.generate(builder, List.of(value));
+                            try {
+                                for (FieldVector valueVectors : fieldVectorList) {
+                                    if (valueVectors.getName().equals(CompositeDataFormatWriter.ROW_ID)) {
+                                        row_id = (long) valueVectors.getObject(i);
+                                        continue;
+                                    }
+                                    Mapper mapper = mappingLookup.getMapper(valueVectors.getName());
+                                    DerivedFieldGenerator derivedFieldGenerator = mapper.derivedFieldGenerator();
+
+                                    Object value = valueVectors.getObject(i);
+                                    if (valueVectors instanceof ViewVarCharVector) {
+                                        BytesRef bytesRef = new BytesRef(((ViewVarCharVector) valueVectors).get(i));
+                                        derivedFieldGenerator.generate(builder, List.of(bytesRef)); // TODO: // Currently keyword field mapper do not have derived field converter from byte[] to BytesRef
+                                    } else {
+                                        derivedFieldGenerator.generate(builder, List.of(value));
+                                    }
+                                    if (valueVectors.getName().equals(IdFieldMapper.NAME)) {
+                                        BytesRef idRef = new BytesArray((byte[]) value).toBytesRef();
+                                        _id = Uid.decodeId(idRef.bytes, idRef.offset, idRef.length);
+                                    }
+                                }
+                            } catch (Exception e) {
+                                logger.error("Failed to derive source for doc id [{i}]: {}", i, e);
+                                throw new OpenSearchException("Failed to derive source for doc id [" + i + "]", e);
+                            } finally {
+                                builder.endObject();
                             }
-                            if (valueVectors.getName().equals(IdFieldMapper.NAME)) {
-                                BytesRef idRef = new BytesArray((byte[]) value).toBytesRef();
-                                _id = Uid.decodeId(idRef.bytes, idRef.offset, idRef.length);
-                            }
+                            assert row_id != null || rowIds.get(i) != null;
+                            assert rowIdToIndex.containsKey(row_id);
+                            assert _id != null;
+                            BytesReference document = BytesReference.bytes(builder);
+                            byteRefs.add(document);
+                            SearchHit hit = new SearchHit(Math.toIntExact(rowIds.get(i)), _id, emptyMap(), emptyMap());
+                            hit.sourceRef(document);
+                            FetchSubPhase.HitContext hitContext = new FetchSubPhase.HitContext(hit, null, Math.toIntExact(rowIds.get(i)), new SourceLookup()); //TODO: make source lookup one per thread
+                            hitContext.sourceLookup().setSource(document);
+                            int index = rowIdToIndex.get(row_id);
+                            hits[index] = hit;
+                            totalHits++;
                         }
-                    } catch (Exception e) {
-                        logger.error("Failed to derive source for doc id [{i}]: {}", i, e);
-                        throw new OpenSearchException("Failed to derive source for doc id [" + i + "]", e);
-                    } finally {
-                        builder.endObject();
                     }
-                    assert row_id != null || rowIds.get(i) != null;
-                    assert _id != null;
-                    BytesReference document = BytesReference.bytes(builder);
-                    byteRefs.add(document);
-                    SearchHit hit = new SearchHit(Math.toIntExact(rowIds.get(i)), _id, emptyMap(), emptyMap());
-                    hit.sourceRef(document);
-                    FetchSubPhase.HitContext hitContext = new FetchSubPhase.HitContext(hit, null, Math.toIntExact(rowIds.get(i)), new SourceLookup()); //TODO: make source lookup one per thread
-                    hitContext.sourceLookup().setSource(document);
-                    int index = rowIdToIndex.get(row_id);
-                    hits[index] = hit;
-                    totalHits++;
+                    context.fetchResult().hits(new SearchHits(hits, new TotalHits(totalHits, TotalHits.Relation.EQUAL_TO), context.queryResult().getMaxScore()));
+                } catch (Exception e) {
+                    logger.error("Failed to execute fetch phase", e);
+                    throw new RuntimeException(e);
                 }
             }
-            context.fetchResult().hits(new SearchHits(hits, new TotalHits(totalHits, TotalHits.Relation.EQUAL_TO), context.queryResult().getMaxScore()));
         };
 
         try {

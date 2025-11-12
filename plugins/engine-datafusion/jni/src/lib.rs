@@ -14,12 +14,12 @@ use datafusion_datasource::source::DataSourceExec;
 use jni::objects::{JByteArray, JClass, JObject};
 use std::collections::{BTreeSet, HashMap};
 use jni::objects::JLongArray;
-use jni::sys::{jbyteArray, jlong, jstring};
+use jni::sys::{jboolean, jbyteArray, jlong, jstring};
 use jni::JNIEnv;
 use std::sync::Arc;
 use arrow_array::{Array, StructArray};
 use arrow_array::ffi::FFI_ArrowArray;
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Field, SchemaRef};
 use arrow_schema::ffi::FFI_ArrowSchema;
 use datafusion::{
     common::DataFusionError
@@ -52,7 +52,7 @@ mod memory;
 mod partial_agg_optimizer;
 
 use crate::custom_cache_manager::CustomCacheManager;
-use crate::row_id_optimizer::ProjectRowIdOptimizer;
+use crate::row_id_optimizer::{ProjectRowIdOptimizer, ROW_BASE_FIELD_NAME, ROW_ID_FIELD_NAME};
 use crate::util::{
     create_file_meta_from_filenames, parse_string_arr, set_object_result_error,
     set_object_result_ok,
@@ -77,12 +77,19 @@ use object_store::ObjectMeta;
 use prost::Message;
 use tokio::runtime::Runtime;
 use std::result;
+use chrono::TimeZone;
+use datafusion::common::ScalarValue;
+use datafusion::logical_expr::Operator;
+use datafusion::physical_expr::expressions::BinaryExpr;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::projection::ProjectionExec;
 
 pub type Result<T, E = DataFusionError> = result::Result<T, E>;
 
 // NativeBridge JNI implementations
 use crate::listing_table::{ListingOptions, ListingTable, ListingTableConfig};
 use jni::objects::{JObjectArray, JString};
+use object_store::path::Path;
 use crate::memory::{CustomMemoryPool, Monitor, MonitoredMemoryPool};
 
 struct DataFusionRuntime {
@@ -224,7 +231,7 @@ pub extern "system" fn Java_org_opensearch_datafusion_jni_NativeBridge_createDat
         }
     };
 
-    let files: Vec<String> = match parse_string_arr(&mut env, files) {
+    let mut files: Vec<String> = match parse_string_arr(&mut env, files) {
         Ok(files) => files,
         Err(e) => {
             let _ = env.throw_new(
@@ -235,6 +242,8 @@ pub extern "system" fn Java_org_opensearch_datafusion_jni_NativeBridge_createDat
         }
     };
 
+    // TODO: This works since files are named similarly ending with incremental generation count, preferably move this up to DatafusionReaderManager to keep file order
+    files.sort();
     let files_metadata = match create_file_meta_from_filenames(&table_path, files.clone()) {
         Ok(metadata) => metadata,
         Err(err) => {
@@ -344,6 +353,7 @@ pub extern "system" fn Java_org_opensearch_datafusion_jni_NativeBridge_executeQu
     shard_view_ptr: jlong,
     table_name: JString,
     substrait_bytes: jbyteArray,
+    is_aggregation_query: jboolean,
     runtime_ptr: jlong
 ) -> jlong {
     let overall = Instant::now();
@@ -353,6 +363,7 @@ pub extern "system" fn Java_org_opensearch_datafusion_jni_NativeBridge_executeQu
         .get_string(&table_name)
         .expect("Couldn't get java string!")
         .into();
+    let is_aggregation_query: bool = is_aggregation_query !=0;
 
     let runtimeEnv = &runtime.runtime_env;
 
@@ -382,22 +393,23 @@ pub extern "system" fn Java_org_opensearch_datafusion_jni_NativeBridge_executeQu
     config.options_mut().execution.parquet.pushdown_filters = false;
     config.options_mut().execution.target_partitions = 1;
 
-    let state = datafusion::execution::SessionStateBuilder::new()
+    let mut state_builder = datafusion::execution::SessionStateBuilder::new()
         .with_config(config)
         .with_runtime_env(Arc::from(runtime_env))
         .with_default_features()
-        .with_physical_optimizer_rule(Arc::new(ProjectRowIdOptimizer))
-        .with_physical_optimizer_rule(Arc::new(PartialAggregationOptimizer))
-        .build();
+        .with_physical_optimizer_rule(Arc::new(PartialAggregationOptimizer));
 
-    let ctx = SessionContext::new_with_state(state);
+    if(!is_aggregation_query) {
+        state_builder = state_builder.with_physical_optimizer_rule(Arc::new(ProjectRowIdOptimizer));
+    }
+    let ctx = SessionContext::new_with_state(state_builder.build());
 
     // Create default parquet options
     let file_format = ParquetFormat::new();
     let listing_options = ListingOptions::new(Arc::new(file_format))
         .with_file_extension(".parquet") // TODO: take this as parameter
         .with_files_metadata(files_meta)
-        .with_table_partition_cols(vec![("row_base".to_string(), DataType::Int64)]);
+        .with_table_partition_cols(if is_aggregation_query { vec![] } else { vec![(ROW_BASE_FIELD_NAME.to_string(), DataType::Int64)] });
 
     // Ideally the executor will give this
     runtime.tokio_runtime.block_on(async {
@@ -474,7 +486,7 @@ pub extern "system" fn Java_org_opensearch_datafusion_jni_NativeBridge_executeQu
             .expect("Failed to execute logical plan");
         let physical_plan = dataframe.clone().create_physical_plan().await.unwrap();
         println!(
-            "Physical Plan:\n{}",
+            "Query Phase Physical Plan:\n{}",
             datafusion::physical_plan::displayable(physical_plan.as_ref()).indent(true)
         );
 
@@ -637,13 +649,23 @@ pub extern "system" fn Java_org_opensearch_datafusion_jni_NativeBridge_executeFe
     list_file_cache.put(table_path.prefix(), object_meta);
 
     let runtime_env = RuntimeEnvBuilder::new()
-        .with_cache_manager(
-            CacheManagerConfig::default().with_list_files_cache(Some(list_file_cache))
+        .with_cache_manager(CacheManagerConfig::default()
+            .with_list_files_cache(Some(list_file_cache))
                 .with_file_metadata_cache(Some(runtime.runtime_env.cache_manager.get_file_metadata_cache())),
-        )
-        .build()
-        .unwrap();
-    let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), Arc::new(runtime_env));
+        ).build().unwrap();
+
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.parquet.pushdown_filters = true;
+    config.options_mut().execution.target_partitions = 9;
+
+    let state = datafusion::execution::SessionStateBuilder::new()
+        .with_config(config)
+        .with_runtime_env(Arc::from(runtime_env))
+        .with_default_features()
+        // .with_physical_optimizer_rule(Arc::new(ProjectRowIdOptimizer))
+        .build();
+
+    let ctx = SessionContext::new_with_state(state);
 
     // Create default parquet options
     let file_format = ParquetFormat::new();
@@ -668,26 +690,6 @@ pub extern "system" fn Java_org_opensearch_datafusion_jni_NativeBridge_executeFe
             }
         };
 
-        // let total_groups = files_metadata[0].row_group_row_counts.len();
-        // let mut access_plan = ParquetAccessPlan::new_all(total_groups);
-        // for i in 0..total_groups {
-        //     access_plan.skip(i);
-        // }
-
-        // let partitioned_files: Vec<PartitionedFile> = files_metadata
-        //     .iter()
-        //     .zip(access_plans.await.iter())
-        //     .map(|(meta, access_plan)| {
-        //         PartitionedFile::new(
-        //             format!("{}/{}",
-        //                     table_path.prefix().to_string().trim_end_matches('/'),
-        //                     meta.object_meta().location.to_string().trim_start_matches('/')
-        //             ),
-        //             meta.object_meta.size
-        //         ).with_extensions(Arc::new(access_plan.clone()))
-        //     })
-        //     .collect();
-
         let access_plans = match access_plans.await {
             Ok(plans) => plans,
             Err(e) => {
@@ -703,10 +705,20 @@ pub extern "system" fn Java_org_opensearch_datafusion_jni_NativeBridge_executeFe
             .iter()
             .zip(access_plans.iter())
             .map(|(meta, access_plan)| {
-                PartitionedFile::new(
-                    meta.object_meta().location.to_string(),
-                    meta.object_meta.size,
-                )
+                PartitionedFile {
+                    object_meta:  ObjectMeta {
+                        location: Path::from(meta.object_meta().location.to_string()),
+                        last_modified: chrono::Utc.timestamp_nanos(0),
+                        size: meta.object_meta.size,
+                        e_tag: None,
+                        version: None,
+                    },
+                    partition_values: vec![ScalarValue::Int64(Some(*meta.row_base))],
+                    range: None,
+                    statistics: None,
+                    extensions: None,
+                    metadata_size_hint: None,
+                }
                 .with_extensions(Arc::new(access_plan.clone()))
             })
             .collect();
@@ -728,22 +740,38 @@ pub extern "system" fn Java_org_opensearch_datafusion_jni_NativeBridge_executeFe
             );
         }
 
+        if(!projections.contains(&ROW_ID_FIELD_NAME.to_string())) {
+            projection_index.push(parquet_schema.index_of(ROW_ID_FIELD_NAME).unwrap());
+        }
+        projection_index.push(parquet_schema.fields.len());
+
         let file_scan_config = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
             parquet_schema.clone(),
             file_source,
         )
-        //.with_limit(limit)
+        .with_table_partition_cols(vec![Field::new(ROW_BASE_FIELD_NAME, DataType::Int64, false)])
         .with_projection(Option::from(projection_index.clone()))
         .with_file_group(file_group)
         .build();
 
-        let parquet_exec = DataSourceExec::from_data_source(file_scan_config);
+        let parquet_exec = DataSourceExec::from_data_source(file_scan_config.clone());
+
+        let projection_exprs = build_projection_exprs(file_scan_config.projected_schema())
+            .expect("Failed to build projection expressions");
+
+        let projection_exec = Arc::new(ProjectionExec::try_new(projection_exprs, parquet_exec)
+            .expect("Failed to create ProjectionExec"));
 
         // IMPORTANT: Only get one reference to each pointer
         // let liquid_ctx = unsafe { &mut *(context_ptr as *mut SessionContext) };
         // let session_ctx = unsafe { Box::from_raw(context_ptr as *mut SessionContext) };
-        let optimized_plan: Arc<dyn ExecutionPlan> = parquet_exec.clone();
+        let optimized_plan: Arc<dyn ExecutionPlan> = projection_exec.clone();
+
+        println!(
+            "Fetch Phase Physical Plan:\n{}",
+            datafusion::physical_plan::displayable(optimized_plan.as_ref()).indent(true)
+        );
 
         let task_ctx = Arc::new(TaskContext::default());
 
@@ -763,6 +791,40 @@ pub extern "system" fn Java_org_opensearch_datafusion_jni_NativeBridge_executeFe
         stream_ptr
     })
 }
+
+fn build_projection_exprs(new_schema: SchemaRef) -> std::result::Result<Vec<(Arc<dyn PhysicalExpr>, String)>, DataFusionError> {
+    let row_id_idx = new_schema.index_of(ROW_ID_FIELD_NAME).expect("Field ___row_id missing");
+    let row_base_idx = new_schema.index_of(ROW_BASE_FIELD_NAME).expect("Field ___row_id missing");
+    let sum_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::new(datafusion::physical_expr::expressions::Column::new(ROW_ID_FIELD_NAME, row_id_idx)),
+        Operator::Plus,
+        Arc::new(datafusion::physical_expr::expressions::Column::new(ROW_BASE_FIELD_NAME, row_base_idx)),
+    ));
+
+    let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
+
+    let mut has_row_id = false;
+    for field_name in new_schema.fields().to_vec() {
+        if field_name.name() == ROW_ID_FIELD_NAME {
+            projection_exprs.push((sum_expr.clone(), field_name.name().clone()));
+            has_row_id = true;
+        } else if(field_name.name() != ROW_BASE_FIELD_NAME) {
+            // Match the column by name from new_schema
+            let idx = new_schema
+                .index_of(&*field_name.name().clone())
+                .unwrap_or_else(|_| panic!("Field {field_name} missing in schema"));
+            projection_exprs.push((
+                Arc::new(datafusion::physical_expr::expressions::Column::new(&*field_name.name(), idx)),
+                field_name.name().clone(),
+            ));
+        }
+    }
+    if !has_row_id {
+        projection_exprs.push((sum_expr.clone(), ROW_ID_FIELD_NAME.parse().unwrap()));
+    }
+    Ok(projection_exprs)
+}
+
 
 async fn create_access_plans(
     row_ids: Vec<jlong>,
