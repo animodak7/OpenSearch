@@ -70,7 +70,8 @@ task buildRustLibrary(type: Exec) {
     def libExtension = osName.contains('windows') ? '.dll' : (osName.contains('mac') ? '.dylib' : '.so')
 
     // Use debug build for development, release for production
-    def buildType = project.hasProperty('rustRelease') ? 'release' : 'debug'
+//    def buildType = project.hasProperty('rustRelease') ? 'release' : 'debug'
+    def buildType = 'release'
     def targetDir = "target/${buildType}"
 
   // Find cargo executable - try common locations
@@ -116,8 +117,8 @@ task copyNativeLibrary(type: Copy, dependsOn: buildRustLibrary) {
     def osName = System.getProperty('os.name').toLowerCase()
     def libPrefix = osName.contains('windows') ? '' : 'lib'
     def libExtension = osName.contains('windows') ? '.dll' : (osName.contains('mac') ? '.dylib' : '.so')
-    def buildType = project.hasProperty('rustRelease') ? 'release' : 'debug'
-
+//    def buildType = project.hasProperty('rustRelease') ? 'release' : 'debug'
+    def buildType = 'release'
     from file("jni/target/${buildType}/${libPrefix}opensearch_datafusion_jni${libExtension}")
     into file('src/main/resources/native')
 
