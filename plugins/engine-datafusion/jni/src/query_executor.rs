@@ -175,6 +175,10 @@ pub async fn execute_query_with_cross_rt_stream(
         }
     };
 
+    println!("Explain show");
+    let clone_df = dataframe.clone().explain(false, true);
+    clone_df?.show().await?;
+    
     let df_stream = match dataframe.execute_stream().await {
         Ok(stream) => stream,
         Err(e) => {
