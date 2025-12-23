@@ -55,8 +55,19 @@ public final class NativeLibraryLoader {
         try {
             loadFromResources(DEFAULT_PATH, libraryName);
             return;
-        }  catch (UnsatisfiedLinkError ignored) {
+        }  catch (RuntimeException ignored) {
             logger.warn("Failed to load library '" + libraryName + "' from default path");
+        }
+
+
+        // Try platform-specific relative resource directory
+        try {
+            String platformDir = PlatformHelper.getPlatformDirectory();
+            String path = Paths.get(DEFAULT_PATH, platformDir).toString();
+            loadFromResources(path, libraryName);
+            return;
+        } catch (RuntimeException e) {
+            logger.warn("Failed to load library '" + libraryName + "' from relative resource directory path");
         }
 
         // Try platform-specific directory

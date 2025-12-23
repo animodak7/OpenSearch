@@ -114,11 +114,19 @@ task copyNativeLibrary(type: Copy, dependsOn: buildRustLibrary) {
     group = 'build'
 
     def osName = System.getProperty('os.name').toLowerCase()
+    def archName = System.getProperty('os.arch').toLowerCase()
+
+    def osDir = osName.contains('win') ? 'windows' : osName.contains('mac') ? 'macos' : 'linux'
+    def archDir = archName.contains('aarch64') || archName.contains('arm64') ? 'aarch64' :
+    archName.contains('64') ? 'x86_64' : 'x86'
+
+    def targetPath = "${osDir}-${archDir}"
+
     def libPrefix = osName.contains('windows') ? '' : 'lib'
     def libExtension = osName.contains('windows') ? '.dll' : (osName.contains('mac') ? '.dylib' : '.so')
 
     from file("jni/target/${buildType}/${libPrefix}opensearch_datafusion_jni${libExtension}")
-    into file('src/main/resources/native')
+    into file("src/main/resources/native/${targetPath}")
 
     // Rename to a standard name for Java to load
     rename { filename ->
@@ -172,8 +180,15 @@ clean {
 test {
     // Set system property to help tests find the native library
   jvmArgs += ["--add-opens", "java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED"]
+  def osName = System.getProperty('os.name').toLowerCase()
+  def archName = System.getProperty('os.arch').toLowerCase()
 
-  systemProperty 'java.library.path', file('src/main/resources/native').absolutePath
+  def osDir = osName.contains('win') ? 'windows' : osName.contains('mac') ? 'macos' : 'linux'
+  def archDir = archName.contains('aarch64') || archName.contains('arm64') ? 'aarch64' :
+    archName.contains('64') ? 'x86_64' : 'x86'
+
+  def targetPath = "${osDir}-${archDir}"
+  systemProperty 'java.library.path', file("src/main/resources/native/${targetPath}").absolutePath
 }
 
 yamlRestTest {
